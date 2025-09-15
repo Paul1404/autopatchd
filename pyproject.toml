@@ -12,8 +12,13 @@ requires-python = ">=3.9"
 keywords = ["patching", "rhel", "rocky", "alma", "systemd", "automation"]
 
 dependencies = [
+    "cryptography>=45.0.7",
+    "jinja2>=3.1.6",
     "pyyaml>=6.0.2",
 ]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [project.scripts]
 autopatchd = "autopatchd.cli:main"

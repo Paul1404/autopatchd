@@ -1,0 +1,18 @@
+# autopatchd configuration file
+
+email:
+  smtp_server: "smtp.example.com"
+  smtp_port: 587
+  from_address: "autopatchd@example.com"
+  to_addresses:
+    - "admin@example.com"
+  use_tls: true
+
+patching:
+  mode: "security"  # security, all, check-only
+  reboot: "auto"    # auto, never, always
+  exclude_packages: []
+
+schedule:
+  timer: "Sun 02:00"
+  randomize_delay: 0
