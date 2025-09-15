@@ -230,6 +230,73 @@ def cmd_cleanup(args):
     print("autopatchd cleaned up")
     return 0
 
+def cmd_check_creds(args):
+    """Check credential configuration"""
+    try:
+        config = Config.load()
+        
+        print("🔐 Credential Check")
+        print("=" * 30)
+        
+        from .reporter import Reporter
+        reporter = Reporter(config)
+        smtp_user, smtp_pass = reporter._load_smtp_credentials()
+        
+        if smtp_user and smtp_pass:
+            print(f"✅ Credentials found")
+            print(f"   User: {smtp_user}")
+            print(f"   Password: {'*' * len(smtp_pass)}")
+        else:
+            print("❌ No credentials found")
+            print("\n🔧 To add credentials, run: autopatchd adjust")
+        
+        # Check credential files
+        print("\nCredential File Locations:")
+        
+        systemd_cred = Path("/run/credentials/autopatchd.service/autopatchd-smtp")
+        if systemd_cred.exists():
+            print(f"  ✅ systemd runtime: {systemd_cred}")
+        else:
+            print(f"  ❌ systemd runtime: {systemd_cred} (not found)")
+        
+        file_cred = Path("/etc/autopatchd/smtp-password.cred")
+        if file_cred.exists():
+            print(f"  ✅ config file: {file_cred}")
+            # Try to determine if it's encrypted or plain
+            try:
+                with open(file_cred, 'rb') as f:
+                    first_bytes = f.read(10)
+                if first_bytes.startswith(b'SYSTEMD_CREDENTIAL'):
+                    print("    (systemd encrypted)")
+                else:
+                    print("    (plain text - secure permissions)")
+            except:
+                pass
+        else:
+            print(f"  ❌ config file: {file_cred} (not found)")
+        
+        # Check service unit LoadCredential
+        service_file = Path("/etc/systemd/system/autopatchd.service")
+        if service_file.exists():
+            print(f"\nService Unit: {service_file}")
+            try:
+                with open(service_file, 'r') as f:
+                    content = f.read()
+                if "LoadCredential=" in content:
+                    for line in content.split('\n'):
+                        if "LoadCredential=" in line:
+                            print(f"  {line.strip()}")
+                else:
+                    print("  ❌ No LoadCredential directive found")
+            except:
+                print("  ❌ Cannot read service file")
+        
+        return 0
+        
+    except FileNotFoundError:
+        print("Error: No configuration found. Run 'autopatchd setup' first.", file=sys.stderr)
+        return 1
+
 
 def cmd_status(args):
     """Show autopatchd status"""
@@ -283,6 +350,10 @@ def main():
     # Test SMTP command  
     test_smtp_parser = subparsers.add_parser("test-smtp", help="Test SMTP configuration")
     test_smtp_parser.set_defaults(func=cmd_test_smtp)
+
+    # Check credentials command
+    creds_parser = subparsers.add_parser("check-creds", help="Check credential configuration")
+    creds_parser.set_defaults(func=cmd_check_creds)
     
     args = parser.parse_args()
     

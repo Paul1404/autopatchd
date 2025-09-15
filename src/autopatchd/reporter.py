@@ -164,19 +164,21 @@ Success: {result.success}
             raise smtplib.SMTPRecipientsRefused(detailed_errors)
     
     def _load_smtp_credentials(self):
-        """Load SMTP credentials from systemd credentials or file"""
-        # Try systemd credentials first
-        cred_file = "/run/credentials/autopatchd.service/smtp-password.cred"
-        if os.path.exists(cred_file):
-            return self._parse_credentials(cred_file)
-        
-        # Fallback to regular file
-        cred_file = "/etc/autopatchd/smtp-password.cred"
-        if os.path.exists(cred_file):
-            return self._parse_credentials(cred_file)
-        
-        logging.warning("No SMTP credentials found")
-        return None, None
+            """Load SMTP credentials from systemd credentials or file"""
+            # Try systemd credentials first (correct path based on LoadCredential name)
+            cred_file = "/run/credentials/autopatchd.service/autopatchd-smtp"
+            if os.path.exists(cred_file):
+                logging.debug(f"Loading systemd credentials from: {cred_file}")
+                return self._parse_credentials(cred_file)
+            
+            # Fallback to regular file
+            cred_file = "/etc/autopatchd/smtp-password.cred"
+            if os.path.exists(cred_file):
+                logging.debug(f"Loading file credentials from: {cred_file}")
+                return self._parse_credentials(cred_file)
+            
+            logging.warning("No SMTP credentials found")
+            return None, None
     
     def _parse_credentials(self, cred_file: str):
         """Parse credentials file"""
