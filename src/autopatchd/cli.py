@@ -129,7 +129,20 @@ def cmd_setup(args):
         logging.error(f"Setup failed: {e}")
         print(f"Error: Setup failed: {e}", file=sys.stderr)
         return 1
-
+    
+def cmd_test_smtp(args):
+    """Test SMTP configuration"""
+    try:
+        config = Config.load()
+        from .reporter import test_smtp_connection
+        success = test_smtp_connection(config)
+        return 0 if success else 1
+    except FileNotFoundError:
+        print("Error: No configuration found. Run 'autopatchd setup' first.", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 def cmd_run(args):
     """Run patch cycle now"""
@@ -162,8 +175,20 @@ def cmd_dry_run(args):
     
     try:
         result = patcher.dry_run()
+        
+        # Show local results first
+        if result.success:
+            if result.updates_available:
+                print(f"✅ Dry-run complete: {len(result.updates_available)} updates available")
+            else:
+                print("✅ Dry-run complete: No updates available")
+        else:
+            print(f"❌ Dry-run failed: {result.error}")
+        
+        # Then attempt to send email report
+        print("\n📧 Sending email report...")
         reporter.send_report(result, dry_run=True)
-        print("Dry-run complete. Check your email for the report.")
+        
         return 0
     except Exception as e:
         logging.error(f"Dry-run failed: {e}")
@@ -254,6 +279,10 @@ def main():
     # Status command
     status_parser = subparsers.add_parser("status", help="Show status")
     status_parser.set_defaults(func=cmd_status)
+
+    # Test SMTP command  
+    test_smtp_parser = subparsers.add_parser("test-smtp", help="Test SMTP configuration")
+    test_smtp_parser.set_defaults(func=cmd_test_smtp)
     
     args = parser.parse_args()
     

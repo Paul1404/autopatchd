@@ -32,8 +32,33 @@ class Reporter:
             self._send_email(subject, body)
             logging.info("Email report sent successfully")
             
+        except smtplib.SMTPRecipientsRefused as e:
+            logging.error(f"Email recipients refused: {e}")
+            print("❌ Email delivery failed: Recipients refused")
+            print("   Check that email addresses are valid and server allows sending to them")
+            
+        except smtplib.SMTPAuthenticationError as e:
+            logging.error(f"SMTP authentication failed: {e}")
+            print("❌ Email delivery failed: Authentication error")
+            print("   Check SMTP username and password")
+            
+        except smtplib.SMTPConnectError as e:
+            logging.error(f"SMTP connection failed: {e}")
+            print("❌ Email delivery failed: Cannot connect to SMTP server")
+            print(f"   Check SMTP server ({self.config.email.smtp_server}:{self.config.email.smtp_port}) and network connectivity")
+            
+        except smtplib.SMTPException as e:
+            logging.error(f"SMTP error: {e}")
+            print(f"❌ Email delivery failed: SMTP error - {e}")
+            
         except Exception as e:
             logging.error(f"Failed to send email report: {e}")
+            print(f"❌ Email delivery failed: {e}")
+            print("\n🔧 Troubleshooting tips:")
+            print("   - Verify SMTP server settings with 'autopatchd adjust'")
+            print("   - Check firewall/network connectivity")
+            print("   - Verify SMTP credentials")
+            print("   - Check server access policies (some servers restrict by IP)")
     
     def _generate_subject(self, result: PatchResult, dry_run: bool) -> str:
         """Generate email subject line"""
@@ -112,15 +137,31 @@ Success: {result.success}
         
         msg.attach(MIMEText(body, 'plain'))
         
-        # Send email
-        with smtplib.SMTP(self.config.email.smtp_server, self.config.email.smtp_port) as server:
-            if self.config.email.use_tls:
-                server.starttls()
-            
-            if smtp_user and smtp_pass:
-                server.login(smtp_user, smtp_pass)
-            
-            server.send_message(msg)
+        # Send email with detailed connection info for debugging
+        logging.debug(f"Connecting to SMTP server: {self.config.email.smtp_server}:{self.config.email.smtp_port}")
+        logging.debug(f"Using TLS: {self.config.email.use_tls}")
+        logging.debug(f"SMTP user: {smtp_user}")
+        
+        try:
+            with smtplib.SMTP(self.config.email.smtp_server, self.config.email.smtp_port) as server:
+                # Enable debug output for troubleshooting
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    server.set_debuglevel(1)
+                
+                if self.config.email.use_tls:
+                    server.starttls()
+                
+                if smtp_user and smtp_pass:
+                    server.login(smtp_user, smtp_pass)
+                
+                server.send_message(msg)
+                
+        except smtplib.SMTPRecipientsRefused as e:
+            # Extract more detailed error info
+            detailed_errors = []
+            for recipient, (code, message) in e.recipients.items():
+                detailed_errors.append(f"{recipient}: {code} {message.decode() if isinstance(message, bytes) else message}")
+            raise smtplib.SMTPRecipientsRefused(detailed_errors)
     
     def _load_smtp_credentials(self):
         """Load SMTP credentials from systemd credentials or file"""
@@ -157,3 +198,40 @@ Success: {result.success}
         except Exception as e:
             logging.error(f"Failed to parse credentials: {e}")
             return None, None
+
+
+def test_smtp_connection(config):
+    """Test SMTP connection and authentication"""
+    print(f"🔍 Testing SMTP connection to {config.email.smtp_server}:{config.email.smtp_port}")
+    
+    try:
+        reporter = Reporter(config)
+        smtp_user, smtp_pass = reporter._load_smtp_credentials()
+        
+        with smtplib.SMTP(config.email.smtp_server, config.email.smtp_port) as server:
+            server.set_debuglevel(1)  # Enable debug output
+            
+            print("✅ Connected to SMTP server")
+            
+            if config.email.use_tls:
+                server.starttls()
+                print("✅ TLS enabled")
+            
+            if smtp_user and smtp_pass:
+                server.login(smtp_user, smtp_pass)
+                print("✅ Authentication successful")
+            else:
+                print("ℹ️  No authentication (credentials not found)")
+            
+            print("✅ SMTP connection test successful")
+            
+    except Exception as e:
+        print(f"❌ SMTP connection test failed: {e}")
+        print("\n🔧 Troubleshooting:")
+        print("   - Check server address and port")
+        print("   - Verify credentials")
+        print("   - Check firewall settings")
+        print("   - Some servers restrict access by IP address")
+        return False
+    
+    return True
