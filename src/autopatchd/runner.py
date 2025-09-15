@@ -14,13 +14,21 @@ def run(conf, dry=False):
         handlers=[logging.FileHandler(logf), logging.StreamHandler()]
     )
 
-    run_hooks("/etc/autopatchd/hooks/pre.d")
-    cmd = ["dnf", "check-update"] if dry else ["/usr/bin/dnf-automatic", "/etc/dnf/automatic.conf", "--timer"]
+    run_hooks("/etc/autopatchd/hooks/pre.d", "pre")
+
+    cmd = ["dnf", "check-update"] if dry else [
+        "/usr/bin/dnf-automatic",
+        "/etc/dnf/automatic.conf",
+        "--timer"
+    ]
+    logging.info("Executing: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     out, _ = proc.communicate()
     open(logf, "a").write(out)
-    run_hooks("/etc/autopatchd/hooks/post.d")
+
+    run_hooks("/etc/autopatchd/hooks/post.d", "post")
 
     subject = f"autopatchd {'DRY-RUN' if dry else 'PATCH'} report - {os.uname().nodename}"
     send_report(conf, subject, out)
-    logging.info("Run complete. Log at %s", logf)
+
+    logging.info("Run complete, log at %s", logf)
