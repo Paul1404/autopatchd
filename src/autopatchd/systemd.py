@@ -1,28 +1,29 @@
-import subprocess, os
-
+import os
 SERVICE = "/etc/systemd/system/autopatchd.service"
-TIMER = "/etc/systemd/system/autopatchd.timer"
 
 def install_units(schedule):
-    open(SERVICE, "w").write(f"""[Unit]
-Description=autopatchd - automatic system patch daemon
+    svc = f"""[Unit]
+Description=autopatchd - OS patch daemon
 After=network-online.target
 
 [Service]
 Type=oneshot
+LoadCredential=mailpass:/etc/autopatchd/smtp-password.cred
 ExecStart=/usr/local/bin/autopatchd run
 StandardOutput=journal
 StandardError=journal
-""")
-
-    open(TIMER, "w").write(f"""[Unit]
+"""
+    tmr = f"""[Unit]
 Description=autopatchd schedule
+
 [Timer]
 OnCalendar={schedule}
 Persistent=true
 
 [Install]
 WantedBy=timers.target
-""")
-    subprocess.run(["systemctl","daemon-reload"])
-    subprocess.run(["systemctl","enable","--now","autopatchd.timer"])
+"""
+    open(SERVICE, "w").write(svc)
+    open("/etc/systemd/system/autopatchd.timer", "w").write(tmr)
+    os.system("systemctl daemon-reload")
+    os.system("systemctl enable --now autopatchd.timer")

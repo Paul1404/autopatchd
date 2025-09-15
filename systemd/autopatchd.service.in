@@ -1,14 +1,10 @@
 [Unit]
-Description=autopatchd - automated patch daemon
+Description=autopatchd - automated system patch daemon
 After=network-online.target
 
 [Service]
 Type=oneshot
+LoadCredential=mailpass:/etc/autopatchd/smtp-password.cred
 ExecStart=/usr/local/bin/autopatchd run
-WorkingDirectory=/
-# Journald logging
 StandardOutput=journal
 StandardError=journal
-Nice=19
-IOSchedulingClass=2
-IOSchedulingPriority=7

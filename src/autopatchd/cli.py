@@ -1,5 +1,6 @@
 import argparse
 import os
+import subprocess
 import sys
 import shutil
 import tempfile
@@ -13,6 +14,7 @@ from .systemd import install_units
 CONFIG_PATH = "/etc/autopatchd/config.yaml"
 CONF_DIR    = "/etc/autopatchd"
 CREDS_DIR   = "/etc/autopatchd/creds.conf.d"
+CREDS_FILE  = "/etc/autopatchd/smtp-password.cred"
 SERVICE     = "/etc/systemd/system/autopatchd.service"
 TIMER       = "/etc/systemd/system/autopatchd.timer"
 LOGROTATE   = "/etc/logrotate.d/autopatchd"
@@ -48,36 +50,40 @@ def main():
 
 
 def setup_interactive():
-    """Interactive wizard that sets up config, credentials, systemd units."""
     print("=== autopatchd setup ===")
 
-    mail_to = input("Mail recipient: ").strip()
+    mail_to   = input("Mail recipient: ").strip()
     mail_from = input("Mail from (envelope FROM): ").strip()
-    relay = input("SMTP relay hostname: ").strip()
-    port = input("SMTP port [587]: ").strip() or "587"
-    user = input("SMTP username: ").strip()
-    pw = getpass.getpass("SMTP password (hidden): ")
-    mode = input("Update mode (default/security) [default]: ").strip() or "default"
-    sched = input("Schedule (OnCalendar) [Sun 02:00]: ").strip() or "Sun 02:00"
+    relay     = input("SMTP relay hostname: ").strip()
+    port      = input("SMTP port [587]: ").strip() or "587"
+    user      = input("SMTP username: ").strip()
+    pw        = getpass.getpass("SMTP password (hidden): ")
+    mode      = input("Update mode (default/security) [default]: ").strip() or "default"
+    sched     = input("Schedule (OnCalendar) [Sun 02:00]: ").strip() or "Sun 02:00"
 
-    logdir = "/var/log/autopatchd"
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    os.makedirs(CREDS_DIR, exist_ok=True)
-    os.makedirs(logdir, exist_ok=True)
+    # Prepare directories
+    os.makedirs(CONF_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
 
-    # Secure credential storage with systemd-creds
-    cred_path = os.path.join(CREDS_DIR, "smtp-password.cred")
+    # Store secret securely with systemd-creds
+    print("[INFO] Encrypting password with systemd-creds...")
     with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
         tmp.write(pw)
         tmp.flush()
         tmp_path = tmp.name
-    ret = os.system(f"systemd-creds encrypt {tmp_path} {cred_path}")
-    os.remove(tmp_path)
-    if ret != 0:
-        print("[ERROR] systemd-creds failed. Ensure systemd >= 250 is installed.")
+    try:
+        subprocess.run(
+            ["systemd-creds", "encrypt", tmp_path, CREDS_FILE],
+            check=True
+        )
+        os.chmod(CREDS_FILE, 0o600)
+    except subprocess.CalledProcessError:
+        print("[ERROR] systemd-creds encrypt failed. Is systemd >= 250 installed?")
         sys.exit(1)
+    finally:
+        os.remove(tmp_path)
 
-    # Write YAML config
+    # Write config.yaml (no password inside!)
     config = {
         "mail": {
             "to": mail_to,
@@ -85,15 +91,19 @@ def setup_interactive():
             "relay": relay,
             "port": int(port),
             "username": user,
-            "cred_file": cred_path,
         },
         "updates": {"mode": mode},
-        "logging": {"dir": logdir},
+        "logging": {"dir": LOG_DIR},
         "schedule": sched,
     }
-
     with open(CONFIG_PATH, "w") as f:
         yaml.safe_dump(config, f, sort_keys=False)
+    os.chmod(CONFIG_PATH, 0o600)
+
+    # Install systemd units with LoadCredential for password
+    install_units(sched)
+
+    print(f"[INFO] autopatchd installed and enabled. Next run scheduled: {sched}")
 
 def cleanup():
     print("[INFO] Cleaning up autopatchd...")
