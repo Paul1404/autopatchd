@@ -1,0 +1,14 @@
+[Unit]
+Description=autopatchd - automated patch daemon
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/autopatchd run
+WorkingDirectory=/
+# Journald logging
+StandardOutput=journal
+StandardError=journal
+Nice=19
+IOSchedulingClass=2
+IOSchedulingPriority=7

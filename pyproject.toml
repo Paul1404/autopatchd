@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autopatchd"
+version = "0.1.0"
+description = "autopatchd - Automated OS patch management daemon for RHEL-based systems"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["patching", "rhel", "rocky", "alma", "systemd", "automation"]
+
+dependencies = [
+    "pyyaml>=6.0.2",
+]
+
+[project.scripts]
+autopatchd = "autopatchd.cli:main"
