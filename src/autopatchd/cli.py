@@ -25,44 +25,110 @@ def cmd_setup(args):
     print("🔧 autopatchd Setup Wizard")
     print("=" * 40)
     
+    # Check prerequisites
+    from .utils import check_dnf_automatic, check_systemd, validate_email, validate_timer_spec
+    
+    if not check_systemd():
+        print("Error: systemd not detected", file=sys.stderr)
+        return 1
+    
+    if not check_dnf_automatic():
+        print("Warning: dnf-automatic not found. Install with: dnf install dnf-automatic")
+    
     config = Config()
     
     # Email configuration
     print("\n📧 Email Configuration")
-    config.email.smtp_server = input("SMTP server: ")
+    while True:
+        smtp_server = input("SMTP server: ").strip()
+        if smtp_server:
+            config.email.smtp_server = smtp_server
+            break
+        print("SMTP server is required")
+    
     config.email.smtp_port = int(input("SMTP port [587]: ") or "587")
-    config.email.from_address = input("From address: ")
     
-    to_addresses = input("To addresses (comma-separated): ")
-    config.email.to_addresses = [addr.strip() for addr in to_addresses.split(",")]
+    while True:
+        from_addr = input("From address: ").strip()
+        if from_addr and validate_email(from_addr):
+            config.email.from_address = from_addr
+            break
+        print("Valid email address is required")
     
-    smtp_user = input("SMTP username: ")
-    smtp_pass = input("SMTP password: ")
+    while True:
+        to_addresses = input("To addresses (comma-separated): ").strip()
+        if to_addresses:
+            addrs = [addr.strip() for addr in to_addresses.split(",")]
+            if all(validate_email(addr) for addr in addrs):
+                config.email.to_addresses = addrs
+                break
+        print("At least one valid email address is required")
+    
+    smtp_user = input("SMTP username (optional): ").strip() or None
+    smtp_pass = None
+    if smtp_user:
+        import getpass
+        smtp_pass = getpass.getpass("SMTP password: ")
     
     # Patching configuration
     print("\n🔄 Patching Configuration")
     modes = ["security", "all", "check-only"]
     print(f"Available modes: {', '.join(modes)}")
-    config.patching.mode = input("Patching mode [security]: ") or "security"
+    
+    while True:
+        mode = input("Patching mode [security]: ").strip() or "security"
+        if mode in modes:
+            config.patching.mode = mode
+            break
+        print(f"Mode must be one of: {', '.join(modes)}")
     
     reboot_options = ["auto", "never", "always"]
     print(f"Reboot options: {', '.join(reboot_options)}")
-    config.patching.reboot = input("Reboot policy [auto]: ") or "auto"
+    
+    while True:
+        reboot = input("Reboot policy [auto]: ").strip() or "auto"
+        if reboot in reboot_options:
+            config.patching.reboot = reboot
+            break
+        print(f"Reboot policy must be one of: {', '.join(reboot_options)}")
     
     # Schedule configuration
     print("\n⏰ Schedule Configuration")
-    config.schedule.timer = input("Timer schedule [Sun 02:00]: ") or "Sun 02:00"
+    print("Examples: 'Sun 02:00', 'daily', 'Mon,Wed,Fri 03:00'")
     
-    # Save configuration
-    config.save()
+    while True:
+        timer = input("Timer schedule [Sun 02:00]: ").strip() or "Sun 02:00"
+        if validate_timer_spec(timer):
+            config.schedule.timer = timer
+            break
+        print("Invalid timer specification")
     
-    # Setup systemd integration
-    systemd = SystemdManager(config, smtp_user, smtp_pass)
-    systemd.install()
-    
-    print("\n✅ autopatchd setup complete!")
-    print("Use 'autopatchd dry-run' to test configuration")
-    return 0
+    try:
+        # Save configuration
+        config.save()
+        
+        # Setup systemd integration
+        systemd = SystemdManager(config, smtp_user, smtp_pass)
+        systemd.install()
+        
+        # Create example hooks
+        from .hooks import create_example_hooks
+        create_example_hooks()
+        
+        print("\n✅ autopatchd setup complete!")
+        print("📁 Configuration: /etc/autopatchd/config.yaml")
+        print("🪝 Hook examples: /etc/autopatchd/hooks/")
+        print("📊 Logs: /var/log/autopatchd/")
+        print("\nNext steps:")
+        print("  autopatchd dry-run    # Test configuration")
+        print("  autopatchd status     # Check timer status")
+        
+        return 0
+        
+    except Exception as e:
+        logging.error(f"Setup failed: {e}")
+        print(f"Error: Setup failed: {e}", file=sys.stderr)
+        return 1
 
 
 def cmd_run(args):
