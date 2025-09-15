@@ -20,7 +20,7 @@ class PatchResult:
     success: bool
     updates_available: List[str]
     updates_installed: List[str]
-    output: str
+    output: str = ""  # Add default value
     error: Optional[str] = None
     reboot_required: bool = False
 
@@ -44,7 +44,8 @@ class Patcher:
             mode=self.config.patching.mode,
             success=False,
             updates_available=[],
-            updates_installed=[]
+            updates_installed=[],
+            output=""
         )
         
         try:
@@ -101,7 +102,8 @@ class Patcher:
             mode="dry-run",
             success=False,
             updates_available=[],
-            updates_installed=[]
+            updates_installed=[],
+            output=""
         )
         
         try:
@@ -130,7 +132,7 @@ class Patcher:
         cmd = ["dnf", "check-update", "--quiet"]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             
             # dnf check-update returns 100 when updates are available
             if result.returncode == 100:
@@ -141,13 +143,24 @@ class Patcher:
                     if line and not line.startswith('Last metadata') and '.' in line:
                         # Extract package name (first field)
                         pkg_name = line.split()[0]
-                        packages.append(pkg_name)
+                        if pkg_name:  # Ensure we have a valid package name
+                            packages.append(pkg_name)
                 return packages
             elif result.returncode == 0:
                 return []  # No updates
             else:
-                raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
+                # Log the actual error for debugging
+                logging.error(f"dnf check-update failed: returncode={result.returncode}")
+                logging.error(f"stdout: {result.stdout}")
+                logging.error(f"stderr: {result.stderr}")
+                raise subprocess.CalledProcessError(
+                    result.returncode, cmd, 
+                    f"stdout: {result.stdout}\nstderr: {result.stderr}"
+                )
                 
+        except subprocess.TimeoutExpired:
+            logging.error("dnf check-update timed out")
+            raise RuntimeError("dnf check-update timed out after 5 minutes")
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to check updates: {e}")
             raise
@@ -301,3 +314,4 @@ email_host = localhost
             f.write("Full Output:\n")
             f.write("-" * 20 + "\n")
             f.write(result.output)
+            f.write("\n")
