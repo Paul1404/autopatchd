@@ -8,6 +8,8 @@ from pathlib import Path
 from jinja2 import Template
 import logging
 
+from .crypto import SimpleCredentialManager
+
 
 class SystemdManager:
     """Manages systemd units and credentials for autopatchd"""
@@ -19,6 +21,7 @@ class SystemdManager:
         self.config = config
         self.smtp_user = smtp_user
         self.smtp_pass = smtp_pass
+        self.cred_manager = SimpleCredentialManager()
     
     def install(self):
         """Install systemd units and credentials"""
@@ -35,69 +38,25 @@ class SystemdManager:
             logging.info("No SMTP credentials provided, skipping credential creation")
             return
         
-        self.CREDS_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Create credentials content
-        creds_content = f"SMTP_USER={self.smtp_user}\nSMTP_PASS={self.smtp_pass}\n"
         creds_file = self.CREDS_DIR / "smtp-password.cred"
         
-        # Try systemd-creds first
         try:
-            logging.info("Attempting to create encrypted credentials with systemd-creds")
+            self.cred_manager.store_credentials(creds_file, self.smtp_user, self.smtp_pass)
+            logging.info("✅ Credentials encrypted and stored successfully")
             
-            # First create a temporary plain file
-            temp_plain = self.CREDS_DIR / "smtp-password.plain"
-            with open(temp_plain, 'w') as f:
-                f.write(creds_content)
-            os.chmod(temp_plain, 0o600)
-            
-            # Use systemd-creds encrypt with correct syntax
-            cmd = [
-                "systemd-creds", "encrypt",
-                "--name=autopatchd-smtp",
-                str(temp_plain),
-                str(creds_file)
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            
-            # Remove the temporary plain file
-            temp_plain.unlink()
-            
-            logging.info("✅ Credentials encrypted with systemd-creds")
-            logging.debug(f"systemd-creds output: {result.stdout}")
-            
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logging.warning(f"systemd-creds failed or not available: {e}")
-            logging.info("Falling back to plain text credential file")
-            
-            # Clean up temp file if it exists
-            temp_plain = self.CREDS_DIR / "smtp-password.plain"
-            if temp_plain.exists():
-                temp_plain.unlink()
-            
-            # Fallback to plain file
-            with open(creds_file, 'w') as f:
-                f.write(creds_content)
-            os.chmod(creds_file, 0o600)
-            logging.info("✅ Credentials stored in plain text file (secure permissions)")
-        
-        # Verify the file was created
-        if creds_file.exists():
-            logging.info(f"Credentials file created: {creds_file}")
-        else:
-            logging.error("Failed to create credentials file")
+            # Verify we can read them back
+            test_user, test_pass = self.cred_manager.load_credentials(creds_file)
+            if test_user == self.smtp_user and test_pass == self.smtp_pass:
+                logging.info("✅ Credential verification successful")
+            else:
+                logging.error("❌ Credential verification failed")
+                
+        except Exception as e:
+            logging.error(f"Failed to create credentials: {e}")
     
     def _create_service_unit(self):
         """Create autopatchd.service unit"""
-        # Check if we should load credentials
-        creds_line = ""
-        creds_file = self.CREDS_DIR / "smtp-password.cred"
-        if creds_file.exists():
-            # Use the correct LoadCredential syntax: name:path
-            creds_line = f"LoadCredential=autopatchd-smtp:{creds_file}"
-        
-        service_template = f"""[Unit]
+        service_template = """[Unit]
 Description=autopatchd - Automated Patching Daemon
 After=network-online.target
 Wants=network-online.target
@@ -108,7 +67,6 @@ User=root
 ExecStart=/usr/local/bin/autopatchd run
 StandardOutput=journal
 StandardError=journal
-{creds_line}
 
 [Install]
 WantedBy=multi-user.target
@@ -240,9 +198,14 @@ WantedBy=timers.target
         # Check credentials
         creds_file = self.CREDS_DIR / "smtp-password.cred"
         if creds_file.exists():
-            print(f"Credentials: Found ({creds_file})")
+            cred_manager = SimpleCredentialManager()
+            user, password = cred_manager.load_credentials(creds_file)
+            if user and password:
+                print(f"Credentials: ✅ Found and decryptable")
+            else:
+                print(f"Credentials: ❌ Found but invalid")
         else:
-            print("Credentials: Not found")
+            print("Credentials: ❌ Not found")
         
         # Next run
         result = subprocess.run(
