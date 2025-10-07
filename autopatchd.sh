@@ -2,8 +2,8 @@
 # ---------------------------------------------------------------------------
 #  autopatchd - Automated DNF update and reboot configuration tool
 # ---------------------------------------------------------------------------
-#  Author: Paul (Systems Engineer, Linux)
-#  Version: 1.5 (Enterprise Edition)
+#  Author: Paul Dresch
+#  Version: 1.5
 #  Date: 2025-10-05
 # ---------------------------------------------------------------------------
 #  Description:
