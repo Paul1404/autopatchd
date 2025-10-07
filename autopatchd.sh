@@ -1,208 +1,200 @@
-#!/bin/sh
-# autopatchd - Manage automated patching (dnf-automatic) on RHEL 9
-# Author: Paul Dresch
+#!/bin/bash
+# ---------------------------------------------------------------------------
+#  autopatchd - Automated DNF update and reboot configuration tool
+# ---------------------------------------------------------------------------
+#  Author: Paul (Systems Engineer, Linux)
+#  Version: 1.5 (Enterprise Edition)
+#  Date: 2025-10-05
+# ---------------------------------------------------------------------------
+#  Description:
+#    Configures automated package updates on RHEL 9 using dnf-automatic.
+#    Provides an interactive CLI (via gum) for SMTP and schedule configuration.
+#    Idempotent, logged, and reversible through the --clean option.
+# ---------------------------------------------------------------------------
 
-CONFIG_FILE="/etc/dnf/automatic.conf"
-BACKUP_FILE="/etc/dnf/automatic.conf.bak"
-MSMTP_FILE="/etc/msmtprc"
+set -euo pipefail
+TAG="autopatchd"
+CONF="/etc/dnf/automatic.conf"
+BACKUP="$CONF.autopatchd.bak"
+OVR_DIR="/etc/systemd/system/dnf-automatic-install.timer.d"
+OVR_FILE="$OVR_DIR/override.conf"
+TIMER="dnf-automatic-install.timer"
 
-DRY_RUN=false
+# -------------------------------------------------------------
+# Utility functions
+# -------------------------------------------------------------
+log() {
+    logger -t "$TAG" "$*"
+    echo "[autopatchd] $*"
+}
 
-log() { printf "%s\n" "$*"; }
-
-run() {
-    # Wrapper - if dry-run, just echo the command
-    if $DRY_RUN; then
-        printf "[dry-run] %s\n" "$*"
-    else
-        eval "$@"
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "This script must be run as root." >&2
+        exit 1
     fi
 }
 
-print_help() {
-    cat <<EOF
-Usage: autopatchd [OPTIONS]
-
-Options:
-  --setup                 Install dnf-automatic (idempotent)
-  --install               Enable auto download + install updates
-  --download              Enable auto download only
-  --notify                Enable notify only
-  --default               Use dnf-automatic.timer (config-driven)
-  --status                Show active timers
-  --disable               Disable all timers
-  --smtp                  Configure SMTP interactively
-  --dry-run               Show what would be done without applying
-  --help                  Show this help
-
-Run without options for interactive menu.
+# -------------------------------------------------------------
+# Ensure gum (Charm CLI) is available
+# -------------------------------------------------------------
+ensure_gum() {
+    if ! command -v gum >/dev/null 2>&1; then
+        log "gum not found. Adding Charm repository and installing."
+        cat > /etc/yum.repos.d/charm.repo <<'EOF'
+[charm]
+name=Charm
+baseurl=https://repo.charm.sh/yum/
+enabled=1
+gpgcheck=1
+gpgkey=https://repo.charm.sh/yum/gpg.key
 EOF
-}
-
-setup() {
-    log ">>> Ensuring dnf-automatic is installed..."
-    if ! rpm -q dnf-automatic >/dev/null 2>&1; then
-        run "dnf -y install dnf-automatic"
+        rpm --import https://repo.charm.sh/yum/gpg.key
+        dnf -y install gum
+        log "gum installed successfully."
     else
-        log "Already installed."
-    fi
-
-    if [ ! -f "$BACKUP_FILE" ]; then
-        log ">>> Backing up config to $BACKUP_FILE"
-        run "cp $CONFIG_FILE $BACKUP_FILE"
-    else
-        log "Backup already exists."
+        log "gum already installed."
     fi
 }
 
-enable_timer() {
-    timer="$1"
-    log ">>> Ensuring timer $timer is enabled..."
-    if systemctl is-enabled --quiet "$timer"; then
-        log "Already enabled: $timer"
-    else
-        run "systemctl disable --now 'dnf-automatic'*.timer >/dev/null 2>&1 || true"
-        run "systemctl enable --now $timer"
-        log "Enabled $timer"
-    fi
+# -------------------------------------------------------------
+# Ensure required dependencies
+# -------------------------------------------------------------
+ensure_dependencies() {
+    log "Ensuring required packages (dnf-automatic)."
+    dnf -y install dnf-automatic >/dev/null
+    log "Dependencies verified."
 }
 
-show_status() {
-    log ">>> dnf-automatic timers status:"
-    if $DRY_RUN; then
-        log "[dry-run] systemctl list-timers --all | grep dnf-automatic"
-    else
-        systemctl list-timers --all | grep dnf-automatic || echo "No active timers."
+# -------------------------------------------------------------
+# Rollback / clean
+# -------------------------------------------------------------
+clean_config() {
+    log "Initiating autopatchd cleanup."
+    systemctl disable --now "$TIMER" >/dev/null 2>&1 || true
+    rm -rf "$OVR_DIR"
+    if [[ -f "$BACKUP" ]]; then
+        mv -f "$BACKUP" "$CONF"
+        log "Restored previous configuration from backup."
     fi
+    log "Cleanup complete. All changes reverted."
+    echo "autopatchd cleanup completed successfully." \
+        | gum style --foreground 212
+    exit 0
 }
 
-disable_all() {
-    log ">>> Disabling all timers..."
-    run "systemctl disable --now 'dnf-automatic'*.timer >/dev/null 2>&1 || true"
-}
+# -------------------------------------------------------------
+# Write new configuration file
+# -------------------------------------------------------------
+write_conf() {
+    local smtp_host="$1"
+    local email_from="$2"
+    local email_to="$3"
 
-config_smtp() {
-    log ">>> SMTP configuration"
-    printf "SMTP Host (e.g. smtp.gmail.com): "
-    read -r smtp_host
-    printf "SMTP Username: "
-    read -r smtp_user
-    printf "SMTP Password (app password recommended): "
-    stty -echo; read -r smtp_pass; stty echo; echo ""
-    printf "From Address: "
-    read -r from_addr
-    printf "To Address: "
-    read -r to_addr
-
-    log ">>> Writing $MSMTP_FILE..."
-    if $DRY_RUN; then
-        log "[dry-run] Create $MSMTP_FILE with host=$smtp_host, user=$smtp_user, from=$from_addr, to=$to_addr"
-    else
-        cat > "$MSMTP_FILE" <<EOF
-account default
-host $smtp_host
-port 587
-auth on
-user $smtp_user
-password $smtp_pass
-tls on
-tls_starttls on
-from $from_addr
-logfile /var/log/msmtp.log
-EOF
-        chmod 600 "$MSMTP_FILE"
+    if [[ ! -f "$BACKUP" ]]; then
+        cp -a "$CONF" "$BACKUP"
+        log "Created backup of $CONF"
     fi
 
-    log ">>> Updating $CONFIG_FILE emitter configuration..."
-    if $DRY_RUN; then
-        log "[dry-run] Update $CONFIG_FILE with command_email + email block"
-    else
-        awk '
-            BEGIN{skip=0}
-            /^\[command_email\]/{skip=1}
-            /^\[email\]/{skip=0;next}
-            skip==1{next}
-            {print}
-        ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-
-        if ! grep -q "command_email" "$CONFIG_FILE"; then
-            cat >> "$CONFIG_FILE" <<EOF
+    cat > "$CONF" <<EOF
+[commands]
+upgrade_type = default
+random_sleep = 0
+download_updates = yes
+apply_updates = yes
+reboot = when-needed
 
 [emitters]
-emit_via = command_email
-
-[command_email]
-command = /usr/bin/msmtp -t
+emit_via = email
 
 [email]
-email_from = $from_addr
-email_to = $to_addr
+email_from = $email_from
+email_to = $email_to
+smtp_server = $smtp_host
+smtp_port = 587
+smtp_auth = none
 EOF
-        fi
+
+    log "Wrote configuration to $CONF"
+}
+
+# -------------------------------------------------------------
+# Configure systemd override for timer schedule
+# -------------------------------------------------------------
+setup_timer() {
+    local schedule="$1"
+    mkdir -p "$OVR_DIR"
+    cat > "$OVR_FILE" <<EOF
+[Timer]
+OnCalendar=
+OnCalendar=$schedule
+RandomizedDelaySec=300
+Persistent=true
+EOF
+    systemctl daemon-reload
+    systemctl enable --now "$TIMER"
+    log "Timer $TIMER enabled (OnCalendar=$schedule)"
+}
+
+# -------------------------------------------------------------
+# Main routine
+# -------------------------------------------------------------
+main() {
+    require_root
+
+    # handle --clean option early
+    if [[ "${1:-}" == "--clean" ]]; then
+        clean_config
     fi
-    log ">>> SMTP setup complete."
+
+    ensure_gum
+    ensure_dependencies
+
+    # Intro banner
+    echo -e "autopatchd configuration tool\n\nThis utility sets up automatic software updates with email reporting." \
+        | gum style --border normal --width 60 --padding "1 2" --foreground 212
+
+    # Interactive email and schedule configuration
+    local smtp_host email_from email_to default_from default_sched schedule
+    default_from="root@$(hostname)"
+    smtp_host=$(gum input --placeholder "mail.example.com" --prompt "SMTP relay host (port 465): ")
+    [[ -z "$smtp_host" ]] && {
+        echo "No SMTP relay provided. Aborting." | gum style --foreground 196
+        exit 1
+    }
+
+    email_from=$(gum input --placeholder "$default_from" --prompt "Email from address: ")
+    email_to=$(gum input --placeholder "$default_from" --prompt "Email to address: ")
+    email_from=${email_from:-$default_from}
+    email_to=${email_to:-$default_from}
+
+    default_sched="Sun *-*-* 02:00:00"
+    schedule=$(gum input --placeholder "$default_sched" --prompt "Systemd OnCalendar time (default: Sunday 02:00): ")
+    schedule=${schedule:-$default_sched}
+
+    echo -e "Configuration summary\n\nSMTP relay: $smtp_host\nFrom: $email_from\nTo: $email_to\nSchedule: $schedule" \
+        | gum style --border normal --width 65 --padding "1 2" --foreground 250
+
+    if ! gum confirm "Proceed with configuration? "; then
+        echo "Setup canceled by user." | gum style --foreground 178
+        exit 0
+    fi
+
+    gum spin --spinner dot --title "Applying configuration..." -- sleep 3
+    write_conf "$smtp_host" "$email_from" "$email_to"
+    setup_timer "$schedule"
+
+    # Final summary
+    echo -e "autopatchd setup complete\n\n" \
+"Automatic updates have been configured.\n" \
+"Schedule: $schedule\n" \
+"SMTP relay: $smtp_host\n" \
+"From: $email_from\n" \
+"To: $email_to\n" \
+"Backup: $BACKUP\n" \
+"Timer: $TIMER (active)\n" \
+"Check logs with: journalctl -t autopatchd" \
+        | gum style --border normal --width 70 --padding "1 3" --margin "1 2" --foreground 84
 }
 
-interactive_menu() {
-    while true; do
-        echo "=== autopatchd interactive mode ==="
-        echo "1) Setup dnf-automatic"
-        echo "2) Enable auto install mode"
-        echo "3) Enable download only"
-        echo "4) Enable notify only"
-        echo "5) Use default config (dnf-automatic.timer)"
-        echo "6) Configure SMTP"
-        echo "7) Show status"
-        echo "8) Disable all timers"
-        echo "9) Exit"
-        printf "Choose: "
-        read -r choice
-        case "$choice" in
-            1) setup ;;
-            2) enable_timer dnf-automatic-install.timer ;;
-            3) enable_timer dnf-automatic-download.timer ;;
-            4) enable_timer dnf-automatic-notifyonly.timer ;;
-            5) enable_timer dnf-automatic.timer ;;
-            6) config_smtp ;;
-            7) show_status ;;
-            8) disable_all ;;
-            9) exit 0 ;;
-            *) log "Invalid choice" ;;
-        esac
-    done
-}
-
-# ----------------- MAIN -----------------
-ARGS=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --dry-run) DRY_RUN=true ;;
-        *) ARGS="$ARGS $1" ;;
-    esac
-    shift
-done
-
-set -- $ARGS
-
-if [ $# -eq 0 ]; then
-    interactive_menu
-    exit 0
-fi
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --setup) setup ;;
-        --install) enable_timer dnf-automatic-install.timer ;;
-        --download) enable_timer dnf-automatic-download.timer ;;
-        --notify) enable_timer dnf-automatic-notifyonly.timer ;;
-        --default) enable_timer dnf-automatic.timer ;;
-        --status) show_status ;;
-        --disable) disable_all ;;
-        --smtp) config_smtp ;;
-        --help|-h) print_help; exit 0 ;;
-        *) log "Unknown option: $1"; print_help; exit 1 ;;
-    esac
-    shift
-done
-
-log ">>> Done."
+main "$@"
