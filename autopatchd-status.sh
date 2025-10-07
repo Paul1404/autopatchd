@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 #  autopatchd-status - Inspection tool for autopatchd and mail relay config
 # ---------------------------------------------------------------------------
-#  Author: Paul (Systems Engineer, Linux)
+#  Author: Paul Dresch
 #  Version: 1.0
 #  Date: 2025-10-05
 # ---------------------------------------------------------------------------
